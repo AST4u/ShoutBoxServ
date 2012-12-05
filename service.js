@@ -1,9 +1,19 @@
-/**
- * Created with JetBrains PhpStorm.
- * User: nanashiRei
- * Date: 05.12.12
- * Time: 06:15
- * ShoutBox relay service
- */
+function Client ( ) {
+    var self = this;
 
-var irc = require('irc');
+    this.conf = require("./configuration.js");
+    this.conf.autoConnect = false;
+    this.conf.autoRejoin = false;
+
+    this.irc = require("irc");
+    this.colr = require("colors");
+    this.req = require("request");
+    this.util = require("underscore");
+
+
+    /** Connect the bot to IRC & MySQL */
+    this.connect = function(conf, irc, colr, req, util) {
+
+    }
+}
+
