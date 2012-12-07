@@ -36,11 +36,11 @@ var RelayClient = function ( config ) {
     bot.handlers = {
         Ready : function () {
             bot.channels.forEach(function (channel) {
-               bot.irc.join(channel);
-               if (bot.handlers.channelMessage[channel]) {
-                   console.log("H [Handler]".cyan + " MessageHandler for %s installed.", channel);
-                   bot.irc.addListener("message" + channel, bot.handlers.channelMessage[channel]);
-               }
+                bot.irc.join(channel);
+                if (bot.handlers.channelMessage[channel]) {
+                    console.log("H [Handler]".cyan + " MessageHandler for %s installed.", channel);
+                    bot.irc.addListener("message" + channel, bot.handlers.channelMessage[channel]);
+                }
             });
             console.log("I [DB]".red + " Connecting to MySQL DataBase ...".yellow);
             var dbUrl = bot.conf.dbConfig.driver + "://" + bot.conf.dbConfig.user + ":" + bot.conf.dbConfig.password + "@" + bot.conf.dbConfig.hostname + "/" + bot.conf.dbConfig.database;
@@ -79,6 +79,17 @@ var RelayClient = function ( config ) {
             bot.irc.say(nick, "Okay, ich habe deine Nachricht direkt an das Team geschickt!");
             //var user = bot.whoisUser(nick);
         },
+        names : function (channel, names) {
+            if (bot.channels.indexOf(channel) >= 0) {
+                //console.log(names);
+                console.log("I [%s] Users: %s".cyan, channel, Objekt.keys(names).join(', '));
+                Object.keys(names).forEach(function (user) {
+                    bot.irc.whois(user);
+                });
+            } else {
+                console.log("I [%s] Dropping info, i don't care.".yellow, channel);
+            }
+        },
         channelJoin : function (channel, nick, message) {
             bot.irc.whois(nick);
         },
@@ -90,7 +101,7 @@ var RelayClient = function ( config ) {
         },
         userQuit : function (nick, reason, channels, message) {
             if (bot.info.users[nick]) {
-                delete bot,info.users[nick];
+                delete bot.info.users[nick];
             }
             //TODO: Channel quit -> SB
         },
@@ -133,6 +144,7 @@ var RelayClient = function ( config ) {
         bot.irc.addListener("join", bot.handlers.channelJoin);
         bot.irc.addListener("part", bot.handlers.channelPart);
         bot.irc.addListener("quit", bot.handlers.userQuit);
+        bot.irc.addListener("names", bot.handlers.names);
 
         bot.irc.addListener("motd", function (motd) {
             console.log("S [Server] Received MOTD from Server".cyan);
