@@ -2,6 +2,7 @@ function Client ( ) {
     var bot = this;
 
     this.conf = require("./configuration.js");
+    console.log(JSON.stringify(this.conf));
     this.conf.clientConfig.autoConnect = false;
     this.conf.clientConfig.autoRejoin = false;
 
