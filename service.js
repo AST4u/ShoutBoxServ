@@ -2,8 +2,16 @@ var irc = require("irc");
 var request = require("request");
 var anyDb = require("any-db");
 var _ = require("underscore");
-
+var util = require("util");
 require("colors");
+
+var query = {
+    messagePoll : "select s.id as message_id, s.userid as id, s.username as nick, s.text as message from shoutbox s " +
+        "where s.deleted = 0 and s.sticky = 0 " +
+        "order by s.date desc limit 10",
+    whois : "select * from users where username like $nick limit 1",
+    sendQry : "insert into shoutbox (userid, username, date, text) VALUES($id,$nick,$timestamp,$message)"
+};
 
 var RelayClient = function ( config ) {
     var bot = this;
@@ -16,10 +24,10 @@ var RelayClient = function ( config ) {
     config.clientConfig.channels = [];
     bot.conf = config;
 
-    console.log("[ Creating RelayClient ]".grey);
-    console.log("Server: %s".yellow, bot.conf.server);
-    console.log("Port: %s [%s]".yellow, bot.conf.clientConfig.port, (bot.conf.clientConfig.secure ? "yes".green : "no".red));
-    console.log("Nickname: %s", bot.conf.nickname);
+    console.log("I [Boot] [ Creating RelayClient ]".grey);
+    console.log("I [Boot] ** Server: %s".yellow, bot.conf.server);
+    console.log("I [Boot] ** Port: %s %s".yellow, bot.conf.clientConfig.port, (bot.conf.clientConfig.secure ? "SSL".green : "insecure".red));
+    console.log("I [Boot] ** Nickname: %s".yellow, bot.conf.nickname);
 
     /** Stored informations */
     bot.info = {};
@@ -30,54 +38,83 @@ var RelayClient = function ( config ) {
             bot.channels.forEach(function (channel) {
                bot.irc.join(channel);
                if (bot.handlers.channelMessage[channel]) {
-                   console.log("[Handler]".magenta + " MessageHandler for %s installed.".green, channel);
+                   console.log("H [Handler]".cyan + " MessageHandler for %s installed.", channel);
                    bot.irc.addListener("message" + channel, bot.handlers.channelMessage[channel]);
                }
             });
-            console.log("Connecting to MySQL DataBase ...".yellow);
+            console.log("I [DB]".red + " Connecting to MySQL DataBase ...".yellow);
             var dbUrl = bot.conf.dbConfig.driver + "://" + bot.conf.dbConfig.user + ":" + bot.conf.dbConfig.password + "@" + bot.conf.dbConfig.hostname + "/" + bot.conf.dbConfig.database;
-            bot.db = anyDb.createConnection(dbUrl, bot.handlers.dbConnected);
+            bot.info.dbconn = anyDb.createConnection(dbUrl, bot.handlers.dbConnected);
             bot.perform();
         },
         nickServAuth : function () {
             if (bot.irc.opt.nick == bot.conf.nickname) {
-                console.log("Sending indentify to NickServ ...".green);
+                console.log("A [Auth]".yellow + " Sending indentify to NickServ ...");
                 bot.irc.say("NickServ", "IDENTIFY " + bot.conf.nickserv.password);
             }
         },
         nickServLoggedIn : function () {
-            console.log("Logged in to NickServ, performing ready event ...".green);
+            console.log("A [Auth]".yellow + " Logged in to NickServ, performing ready event ...".green);
             bot.irc.opt.authed = true;
             bot.handlers.Ready();
         },
         channelMessage : {
             all : function (nick, to, text, message) {
                 if (!bot.handlers.channelMessage[to]) {
-                    console.log("G [%s] <%s> %s".gray, to, nick, text);
+                    console.log("G [%s] <%s> %s".grey, to, nick, text);
                     //TODO: Gloabl command handlers
                 }
             },
-            "#ast-4-you" : function (nick, to, text, message) {
-                console.log("C [%s] <%s> %s".gray, to, nick, text);
+            "#ast4u-talk" : function (nick, text, message) {
+                console.log("R [%s/%s] <%s> %s".cyan,
+                    '#ast4u-talk',
+                    (bot.info.users[nick] ? 'OKAY' : 'FAIL'),
+                    nick,
+                    text);
                 //TODO: Relay to DataBase
             }
         },
-        privateMessage : function () {
-
+        privateMessage : function (nick, text, message) {
+            console.log("Q [Query]".blue + " <%s> %s", nick, text);
+            bot.irc.say(nick, "Okay, ich habe deine Nachricht direkt an das Team geschickt!");
+            //var user = bot.whoisUser(nick);
         },
-        dbConnected : function () {
-            console.log("Database connection established!".green);
-            console.log(arguments);
+        channelJoin : function (channel, nick, message) {
+            bot.irc.whois(nick);
+        },
+        channelPart : function (channel, nick, reason, message) {
+            if (bot.info.users[nick]) {
+                delete bot.info.users[nick];
+            }
+            //TODO: Channel left -> SB
+        },
+        userQuit : function (nick, reason, channels, message) {
+            if (bot.info.users[nick]) {
+                delete bot,info.users[nick];
+            }
+            //TODO: Channel quit -> SB
+        },
+        whois : function (who) {
+            bot.whoisUser(who, bot.handlers.joinWhois);
+        },
+        joinWhois : function (user, isFound) {
+            if (isFound) {
+                bot.info.users[user.username] = user;
+            }
+        },
+        dbConnected : function (err, adapter) {
+            console.log("I [DB]".cyan + " Database connection established!".green);
+            bot.info.db = adapter;
         },
         Error : function (error) {
-            console.log(error.red);
+            console.log("! [Fatality]".red + (" " + error).yellow.bold);
         }
     };
 
     /** Connect / Reconnect the bot to IRC & MySQL */
     bot.connect = function () {
         if (bot.irc && bot.irc.connected) {
-            console.log("Disconnection previous connection ...".yellow);
+            console.log("! [Fatality]".red + " Disconnecting previous connection ...".yellow);
             bot.disconnect("Reconnecting...", bot.createConnection);
         } else {
             bot.createConnection();
@@ -85,7 +122,7 @@ var RelayClient = function ( config ) {
     };
 
     bot.createConnection = function () {
-        console.log("Connecting to IRC Server %s ...".cyan, bot.conf.server);
+        console.log("S [Server] Connecting to IRC Server %s ...".cyan, bot.conf.server);
 
         bot.irc = new irc.Client(bot.conf.server, bot.conf.nickname, bot.conf.clientConfig);
 
@@ -93,10 +130,14 @@ var RelayClient = function ( config ) {
         bot.irc.addListener("message#", bot.handlers.channelMessage.all);
         bot.irc.addListener("pm", bot.handlers.privateMessage);
 
+        bot.irc.addListener("join", bot.handlers.channelJoin);
+        bot.irc.addListener("part", bot.handlers.channelPart);
+        bot.irc.addListener("quit", bot.handlers.userQuit);
+
         bot.irc.addListener("motd", function (motd) {
-            console.log("Received MOTD from Server".cyan);
+            console.log("S [Server] Received MOTD from Server".cyan);
             if (!bot.conf.nickserv.enabled) {
-                console.log("Running early Ready ...".magenta);
+                console.log("? [Madness] Running early Ready ...".magenta);
 
                 bot.handlers.Ready();
                 bot.info.motd = motd;
@@ -115,10 +156,28 @@ var RelayClient = function ( config ) {
             }
         });
 
+        bot.info.users = {};
+
         bot.irc.connect();
         bot.irc.opt.authed = false;
     };
 
+    bot.whoisUser = function (username, callback) {
+        if (bot.info.db) {
+
+            var whois = bot.info.db.query(query.whois, {nick: username});
+            whois.fired = false;
+            whois.on('row', function (row) {
+               whois.fired = true;
+               callback(row, true);
+            });
+            whois.on('end', function () {
+               if (!whois.fired) {
+                   callback(username);
+               }
+            });
+        }
+    };
     /** Tries to login with whatever Service that is configured */
     bot.perform = function () {
         //TODO: Implement performs
