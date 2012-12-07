@@ -82,7 +82,7 @@ var RelayClient = function ( config ) {
         names : function (channel, names) {
             if (bot.channels.indexOf(channel) >= 0) {
                 //console.log(names);
-                console.log("I [%s] Users: %s".cyan, channel, Objekt.keys(names).join(', '));
+                console.log("I [%s] Users: %s".cyan, channel, Object.keys(names).join(', '));
                 Object.keys(names).forEach(function (user) {
                     bot.irc.whois(user);
                 });
