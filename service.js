@@ -68,9 +68,12 @@ var RelayClient = function ( config ) {
             "#ast4u-talk" : function (nick, text, message) {
                 console.log("R [%s/%s] <%s> %s".cyan,
                     '#ast4u-talk',
-                    (bot.info.users[nick] ? 'OKAY' : 'FAIL'),
+                    (bot.info.users[nick.toLowerCase()] ? 'OKAY' : 'FAIL'),
                     nick,
                     text);
+                if (text == "!thisisareallystupidcommand") {
+                    bot.irc.say('#ast4u-talk', util.format("Lol i %s know you!", (bot.info.users[nick.toLowerCase()] ? "do" : "don't")));
+                }
                 //TODO: Relay to DataBase
             }
         },
@@ -83,34 +86,45 @@ var RelayClient = function ( config ) {
             if (bot.channels.indexOf(channel) >= 0) {
                 //console.log(names);
                 console.log("I [%s] Users: %s".cyan, channel, Object.keys(names).join(', '));
-                Object.keys(names).forEach(function (user) {
-                    bot.irc.whois(user);
+                Object.keys(names).forEach(function (nick) {
+                    nick = nick.toLowerCase();
+                    bot.whoisUser(nick, bot.handlers.joinWhois);
                 });
             } else {
                 console.log("I [%s] Dropping info, i don't care.".yellow, channel);
             }
         },
         channelJoin : function (channel, nick, message) {
+            nick = nick.toLowerCase();
             bot.irc.whois(nick);
         },
         channelPart : function (channel, nick, reason, message) {
+            nick = nick.toLowerCase();
             if (bot.info.users[nick]) {
                 delete bot.info.users[nick];
             }
             //TODO: Channel left -> SB
         },
         userQuit : function (nick, reason, channels, message) {
+            nick = nick.toLowerCase();
             if (bot.info.users[nick]) {
                 delete bot.info.users[nick];
             }
             //TODO: Channel quit -> SB
         },
         whois : function (who) {
-            bot.whoisUser(who, bot.handlers.joinWhois);
+            if (who) {
+                console.log("I [Whois]".cyan + (" %s is " + JSON.stringify(who)).grey, who.nick);
+                if (who.operator) {
+                    bot.irc.say('#ast4u', bot.irc.wrap("red","Holy shit! %s, ist ja ein IRC-Admin!"));
+                }
+                bot.whoisUser(who.nick, bot.handlers.joinWhois);
+            }
         },
         joinWhois : function (user, isFound) {
             if (isFound) {
-                bot.info.users[user.username] = user;
+                console.log("I [IdentRepl] User %s identified!".green, user.username);
+                bot.info.users[user.username.toLowerCase()] = user;
             }
         },
         dbConnected : function (err, adapter) {
@@ -145,6 +159,7 @@ var RelayClient = function ( config ) {
         bot.irc.addListener("part", bot.handlers.channelPart);
         bot.irc.addListener("quit", bot.handlers.userQuit);
         bot.irc.addListener("names", bot.handlers.names);
+        bot.irc.addListener("whois", bot.handlers.whois);
 
         bot.irc.addListener("motd", function (motd) {
             console.log("S [Server] Received MOTD from Server".cyan);
