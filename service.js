@@ -3,9 +3,10 @@ var request = require("request");
 var anyDb = require("any-db");
 var _ = require("underscore");
 var util = require("util");
+//var tty = require("tty");
 require("colors");
 
-var query = {
+var queryStrings = {
     messagePoll : "select s.id as message_id, s.userid as id, s.username as nick, s.text as message from shoutbox s " +
         "where s.deleted = 0 and s.sticky = 0 " +
         "order by s.date desc limit 10",
@@ -24,130 +25,118 @@ var RelayClient = function ( config ) {
     config.clientConfig.channels = [];
     bot.conf = config;
 
-    console.log("I [Boot] [ Creating RelayClient ]".grey);
-    console.log("I [Boot] ** Server: %s".yellow, bot.conf.server);
-    console.log("I [Boot] ** Port: %s %s".yellow, bot.conf.clientConfig.port, (bot.conf.clientConfig.secure ? "SSL".green : "insecure".red));
-    console.log("I [Boot] ** Nickname: %s".yellow, bot.conf.nickname);
-
     /** Stored informations */
-    bot.info = {};
+    _.extend(bot, {
+        info: {},
+        authed: false,
+        users: {},
+        db: null
+    });
 
     /** Event Handlers */
     bot.handlers = {
-        Ready : function () {
-            bot.channels.forEach(function (channel) {
-                bot.irc.join(channel);
-                if (bot.handlers.channelMessage[channel]) {
-                    console.log("H [Handler]".cyan + " MessageHandler for %s installed.", channel);
-                    bot.irc.addListener("message" + channel, bot.handlers.channelMessage[channel]);
-                }
-            });
-            console.log("I [DB]".red + " Connecting to MySQL DataBase ...".yellow);
-            var dbUrl = bot.conf.dbConfig.driver + "://" + bot.conf.dbConfig.user + ":" + bot.conf.dbConfig.password + "@" + bot.conf.dbConfig.hostname + "/" + bot.conf.dbConfig.database;
-            bot.info.dbconn = anyDb.createConnection(dbUrl, bot.handlers.dbConnected);
-            bot.perform();
-        },
         nickServAuth : function () {
-            if (bot.irc.opt.nick == bot.conf.nickname) {
-                console.log("A [Auth]".yellow + " Sending indentify to NickServ ...");
+            if (!bot.authed && bot.irc.opt.nick == bot.conf.nickname) {
+                bot.log(1, "Auth", "Sending identify command to NickServ.", ["yellow", "cyan"]);
                 bot.irc.say("NickServ", "IDENTIFY " + bot.conf.nickserv.password);
             }
         },
+
         nickServLoggedIn : function () {
-            console.log("A [Auth]".yellow + " Logged in to NickServ, performing ready event ...".green);
-            bot.irc.opt.authed = true;
-            bot.handlers.Ready();
+            bot.log(1, "Auth", "We are now logged in.", ["yellow", "green"]);
+            bot.authed = true;
+            bot.ready();
         },
+
         channelMessage : {
             all : function (nick, to, text, message) {
                 if (!bot.handlers.channelMessage[to]) {
-                    console.log("G [%s] <%s> %s".grey, to, nick, text);
-                    //TODO: Gloabl command handlers
+                    bot.log(0, "Channel", util.format("[%s] <%s> %s", to, nick, text), ["cyan", "white"]);
+                    //TODO: Talk with me?!
                 }
             },
+
             "#ast4u-talk" : function (nick, text, message) {
-                console.log("R [%s/%s] <%s> %s".cyan,
-                    '#ast4u-talk',
-                    (bot.info.users[nick.toLowerCase()] ? 'OKAY' : 'FAIL'),
-                    nick,
-                    text);
-                if (text == "!thisisareallystupidcommand") {
-                    bot.irc.say('#ast4u-talk', util.format("Lol i %s know you!", (bot.info.users[nick.toLowerCase()] ? "do" : "don't")));
-                }
+                var channel = "#ast4u-talk";
+                var dbUser = bot.getUser(nick);
+                bot.log(0, "Relay", util.format("[%s] <%s> %s (%s)",
+                    channel, nick, text, (dbUser.id || 'not-verified')), ["red", "cyan"]);
                 //TODO: Relay to DataBase
             }
         },
+
         privateMessage : function (nick, text, message) {
-            console.log("Q [Query]".blue + " <%s> %s", nick, text);
+            bot.log(1, "Query", util.format("<%s> %s", nick, text), ["yellow","cyan"]);
             bot.irc.say(nick, "Okay, ich habe deine Nachricht direkt an das Team geschickt!");
-            //var user = bot.whoisUser(nick);
         },
-        names : function (channel, names) {
-            if (bot.channels.indexOf(channel) >= 0) {
-                //console.log(names);
-                console.log("I [%s] Users: %s".cyan, channel, Object.keys(names).join(', '));
-                Object.keys(names).forEach(function (nick) {
-                    nick = nick.toLowerCase();
-                    bot.whoisUser(nick, bot.handlers.joinWhois);
+
+        dbConnected : function (err, adapter) {
+            bot.log(1, "Database", "Database connection established!", ["cyan", "green"]);
+            bot.db = adapter;
+        },
+
+        Error : function (error) {
+            bot.log(4, "Fatality", error, ["red","red"]);
+        },
+
+        auto_names : function (channel, names) {
+            if (_.contains(bot.channels, channel) >= 0) {
+                bot.log(1, "Names", util.format("Got names for %s. Processing them now ...", channel), ["cyan", "grey"]);
+                bot.log(0, "Names", channel + ": " + _.keys(names).join(', '), ["cyan", "grey"]);
+                _.keys(names).forEach(function (nickname) {
+                    bot.registerUser(nickname);
                 });
             } else {
-                console.log("I [%s] Dropping info, i don't care.".yellow, channel);
+                bot.log(1, "Names", util.format("Got names for %s but ignoring it!", channel), ["cyan", "grey"]);
             }
         },
-        channelJoin : function (channel, nick, message) {
-            nick = nick.toLowerCase();
-            bot.irc.whois(nick);
-        },
-        channelPart : function (channel, nick, reason, message) {
-            nick = nick.toLowerCase();
-            if (bot.info.users[nick]) {
-                delete bot.info.users[nick];
-            }
-            //TODO: Channel left -> SB
-        },
-        userQuit : function (nick, reason, channels, message) {
-            nick = nick.toLowerCase();
-            if (bot.info.users[nick]) {
-                delete bot.info.users[nick];
-            }
-            //TODO: Channel quit -> SB
-        },
-        whois : function (who) {
-            if (who) {
-                console.log("I [Whois]".cyan + (" %s is " + JSON.stringify(who)).grey, who.nick);
-                if (who.operator) {
-                    bot.irc.say('#ast4u', bot.irc.wrap("red","Holy shit! %s, ist ja ein IRC-Admin!"));
-                }
-                bot.whoisUser(who.nick, bot.handlers.joinWhois);
-            }
-        },
-        joinWhois : function (user, isFound) {
-            if (isFound) {
-                console.log("I [IdentRepl] User %s identified!".green, user.username);
-                bot.info.users[user.username.toLowerCase()] = user;
-            }
-        },
-        dbConnected : function (err, adapter) {
-            console.log("I [DB]".cyan + " Database connection established!".green);
-            bot.info.db = adapter;
-        },
-        Error : function (error) {
-            console.log("! [Fatality]".red + (" " + error).yellow.bold);
+
+        /** Register user */
+        auto_join : function (channel, nick, message) { bot.registerUser(nick); },
+
+        /** Forget user */
+        auto_part : function (channel, nick, message) { bot.dropUser(nick); },
+        auto_kick : function (channel, nick, by, reason, message) { bot.dropUser(nick); },
+        auto_quit : function (nick, reason, channels, message) { bot.dropUser(nick); },
+        auto_kill : function (nick, reason, channels, message) { bot.dropUser(nick); },
+
+        /** Handle incomming commands */
+        command : function(nick, channel, command, args, message) {
+            //TODO: Handle commands
         }
+    };
+
+    /** Loggin helper, just ignore it. */
+    bot.padStr = function (str, num) { while (str.length < num) str += " "; return str; };
+    bot.logLevel = ['info','notice','warn','error','fatality','madness','debug'];
+    bot.log = function (level, tag, message, colors) {
+        var levelName = bot.padStr(bot.logLevel[level] || bot.logLevel[5], 11);
+        console.log( levelName.grey + '| ' + ('[' + bot.padStr(tag, 11) + '] ')[colors[0]] + message[colors[1]] );
     };
 
     /** Connect / Reconnect the bot to IRC & MySQL */
     bot.connect = function () {
         if (bot.irc && bot.irc.connected) {
-            console.log("! [Fatality]".red + " Disconnecting previous connection ...".yellow);
+            bot.log(4, "IRC", "Disconnecting previous connection ...", ["red", "red"]);
             bot.disconnect("Reconnecting...", bot.createConnection);
         } else {
             bot.createConnection();
         }
     };
 
+    /** Print some info */
+    bot.log(0, "Boot", "Starting up ...", ["yellow", "gray"]);
+    bot.log(0, "Boot",
+        util.format("Server: %s:%s %s, Nick: %s",
+            bot.conf.server,
+            bot.conf.clientConfig.port,
+            (bot.conf.clientConfig ? 'SSL' : 'insecure'),
+            bot.conf.nickname
+        ), ["yellow", "gray"]);
+
+    /** Create the base and connect to IRC & MySQL */
     bot.createConnection = function () {
-        console.log("S [Server] Connecting to IRC Server %s ...".cyan, bot.conf.server);
+        bot.log(1, "Server", util.format("Connecting to IRC Server %s ...", bot.conf.server), ["cyan","white"]);
 
         bot.irc = new irc.Client(bot.conf.server, bot.conf.nickname, bot.conf.clientConfig);
 
@@ -155,24 +144,17 @@ var RelayClient = function ( config ) {
         bot.irc.addListener("message#", bot.handlers.channelMessage.all);
         bot.irc.addListener("pm", bot.handlers.privateMessage);
 
-        bot.irc.addListener("join", bot.handlers.channelJoin);
-        bot.irc.addListener("part", bot.handlers.channelPart);
-        bot.irc.addListener("quit", bot.handlers.userQuit);
-        bot.irc.addListener("names", bot.handlers.names);
-        bot.irc.addListener("whois", bot.handlers.whois);
-
-        bot.irc.addListener("motd", function (motd) {
-            console.log("S [Server] Received MOTD from Server".cyan);
-            if (!bot.conf.nickserv.enabled) {
-                console.log("? [Madness] Running early Ready ...".magenta);
-
-                bot.handlers.Ready();
-                bot.info.motd = motd;
+        _.each(_.keys(bot.handlers), function(handler) {
+            if (handler.length >= 6 && handler.substr(0,4) == "auto") {
+                var event = handler.substr(5);
+                bot.log(1, "Handler", "Installing auto-registered handler for: " + event, ["magenta", "cyan"]);
+                bot.irc.addListener(event, bot.handlers[handler]);
             }
         });
 
+        /** NickServ */
         bot.irc.addListener("notice", function (nick, to, text, message) {
-            console.log("N [%s] <%s> %s".magenta, to, nick, text);
+            bot.log(1, "Notice", util.format("[%s] <%s> %s", to, nick, text), ["green", "white"]);
             if (bot.conf.nickserv.enabled && to == bot.irc.opt.nick && nick == "NickServ") {
                 if (text.search(/identify/i) != -1) {
                     bot.handlers.nickServAuth();
@@ -183,33 +165,64 @@ var RelayClient = function ( config ) {
             }
         });
 
-        bot.info.users = {};
+        var dbConf = bot.conf.dbConfig;
+        var dbUrl = util.format("%s://%s:%s@%s/%s", dbConf.driver, dbConf.user, dbConf.password, dbConf.hostname, dbConf.database);
+        bot.dbconn = anyDb.createConnection(dbUrl, bot.handlers.dbConnected);
 
         bot.irc.connect();
-        bot.irc.opt.authed = false;
+        bot.authed = false;
     };
 
-    bot.whoisUser = function (username, callback) {
-        if (bot.info.db) {
+    bot.ready = function () {
+        bot.channels.forEach(function (channel) {
+            bot.irc.join(channel);
+            if (bot.handlers.channelMessage[channel]) {
+                bot.log(1, "Handler", "MessageHandler installed for " + channel, ["magenta","white"]);
+                bot.irc.addListener("message" + channel, bot.handlers.channelMessage[channel]);
+            }
+        });
 
-            var whois = bot.info.db.query(query.whois, {nick: username});
-            whois.fired = false;
-            whois.on('row', function (row) {
-               whois.fired = true;
-               callback(row, true);
-            });
-            whois.on('end', function () {
-               if (!whois.fired) {
-                   callback(username);
-               }
-            });
+        bot.perform();
+    };
+
+    bot.getUser = function (nickname) {
+        return _.extend({nickname: nickname}, bot.users[nickname] || {});
+    };
+
+    bot.dropUser = function (nickname) {
+        if (bot.users[nickname]) {
+            delete bot.users[nickname];
         }
     };
+
+    bot.registerUser = function (nickname) {
+        bot.log(1, "DB Whois", "Trying to find " + nickname, ["magenta", "white"]);
+        bot.whoisUser(nickname, bot.registerUserCallback);
+    };
+
+    bot.registerUserCallback = function (nickname, dbRow) {
+        bot.users[nickname] = _.extend((bot.users[nickname]|| {}), dbRow);
+    };
+
+    /** Perform a whois on an IRC user */
+    bot.whoisUser = function (username, callback) {
+        var query = bot.db.query(queryStrings.whois, {nick: username});
+        var result = false;
+        query.on('row', function (row) {
+            bot.log(1, "DB Whois", "Possitive hit for " + username, ["magenta", "green"]);
+            result = row;
+        });
+        query.on('end', function () {
+            callback(username, result);
+        });
+    };
+
     /** Tries to login with whatever Service that is configured */
     bot.perform = function () {
         //TODO: Implement performs
     };
 }
+
 
 var RelayConfig = require("./configuration.js");
 
