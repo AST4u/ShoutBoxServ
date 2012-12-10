@@ -6,8 +6,8 @@ var util = require("util");
 require("colors");
 
 var queryStrings = {
-    messagePoll : "SELECT s.id AS messageId, s.userid as id, s.username as nick, s.text as message FROM shoutbox s " +
-        "WHERE s.deleted = 0 AND s.sticky = 0 " +
+    messagePoll : "SELECT s.id AS messageId, s.userid AS id, s.username AS nick, s.text AS message FROM shoutbox s " +
+        "WHERE s.deleted = 0 AND s.sticky = 0 AND s.id > $fromid " +
         "ORDER BY s.date DESC LIMIT 10",
 
     whois : "SELECT * FROM users WHERE username LIKE $nick AND enabled = 'yes' AND parked = 'no' LIMIT 1",
@@ -26,7 +26,7 @@ var queryStrings = {
     selectKey: "SELECT HEX(irckey) as irckey, id FROM irc_relayusers WHERE irckey = $key LIMIT 1",
     createKey: "INSERT INTO irc_relayusers (id,irckey) VALUES ($id,UNHEX($key))",
     sendPM: "INSERT INTO messages (sender,receiver,folder_in,folder_out,added,read_date,subject,msg,unread) VALUES " +
-        "(0,$id,-1,0,CURDATE(),NULL,'IRC Shoutbox Key',$msg,'yes')"
+        "(0,$id,-1,0,CURTIME(),NULL,'IRC Shoutbox Key',$msg,'yes')"
 };
 
 var RelayClient = function ( config ) {
@@ -47,6 +47,7 @@ var RelayClient = function ( config ) {
         users: {},
         db: null,
         pollid: false,
+        lastMsgId: 0,
         lookup: {}
     });
 
@@ -145,6 +146,9 @@ var RelayClient = function ( config ) {
         //auto_join : function (channel, nick, message) { bot.registerUser(nick); },
         auto_join : function (channel, nick, message) {
             if (nick == bot.irc.opt.nick) {
+                if (channel == bot.conf.poller.channel) {
+                    bot.startPolling(bot.conf.poller.interval);
+                }
                 bot.log(1, "Join", channel, ["green","white"]);
             } else {
                 bot.irc.whois(nick);
@@ -179,6 +183,11 @@ var RelayClient = function ( config ) {
 
     bot.commands = {
         whoami : function (channel, nick, params, text, message) {
+            if (channel == "__shorthelp")
+                return "Zeigt an, als wer du identifiziert bist.";
+            if (channel == "__help")
+                return ["Beispiel: @whoami"];
+
             var user = bot.getUser(nick);
             var tell = (channel ? 'say' : 'notice');
             if (user && user.id) {
@@ -187,8 +196,14 @@ var RelayClient = function ( config ) {
             } else {
                 bot.irc[tell](channel || nick, nick + ": Hmmm...? Mag ihhh neeet D:");
             }
+            return true;
         },
         login : function (channel, nick, params, text, message) {
+            if (channel == "__shorthelp")
+                return "Logt dich mit deinem IRC-Key (@help getkey) in das Relay ein.";
+            if (channel == "__help")
+                return ["/msg " + bot.irc.opt.nick + " login <irc-key>"];
+
             if (channel) {
                 if (params.length > 0) {
                     bot.log(2, "Security", util.format("IRC-Key von %s wird neu generiert! (Channel Message)", nick),
@@ -205,11 +220,28 @@ var RelayClient = function ( config ) {
                     bot.irc.notice(nick, "Syntax: login <irc-key>");
                 }
             }
+            return true;
         },
         getkey : function (channel, nick, params, text, message) {
+            if (channel == "__shorthelp")
+                return "Fordert einen IRC Key an. Siehe '@help getkey' für details.";
+            if (channel == "__help")
+                return [
+                    "Hi, " + nick + ", mit diesem Kommando forderst du deinen IRC Key an,",
+                    "dieser ist wie dein Passkey ein persönliches Geheimnis!",
+                    "Nach verwendung, wird dir auf dem Tracker eine PM zugestellt.",
+                    irc.colors.wrap("bold","In der PM findest du weitere Anweisungen!"),
+                    "Verwendung: @getkey " + bot.irc.opt.nick
+                ];
             bot.createUser(nick, params.join(" "));
+            return true;
         },
         fuckoff : function (channel, nick, params, text, message) {
+            if (channel == "__shorthelp")
+                return "Nichts für dich :P";
+            if (channel == "__help")
+                return ["Verwendung: @fuckoff"];
+
             var user = bot.getUser(nick);
             if (user && user.class >= 105) {
                 bot.quit("Fucking off... :'(");
@@ -221,12 +253,31 @@ var RelayClient = function ( config ) {
                 }
 
             }
+            return true;
         },
         help : function (channel, nick, params, text, message) {
-            _.keys(bot.commands).forEach(function(cmd) {
-                bot.irc.notice(nick, "Command: @" + cmd);
-            });
-            bot.irc.notice(nick, "Für details: @help <command>");
+            if (channel == "__shorthelp")
+                return "Diese Hilfe...!?";
+            if (channel == "__help")
+                return ["Verwendung: @help command - für Details"];
+
+            if (params.length <= 0) {
+                _.keys(bot.commands).forEach(function(cmd) {
+                    bot.irc.notice(nick, "Command: @" + cmd + " - " + irc.colors.wrap("bold",bot.commands[cmd]("__shorthelp")));
+                });
+                bot.irc.notice(nick, "Für details: @help <command>");
+            } else {
+                if (bot.commands[params[0]]) {
+                    bot.irc.notice(nick, "Commande: @" + params[0]);
+                    bot.irc.notice(nick, bot.commands[params[0]]("__shorthelp"));
+                    bot.commands[params[0]]("__help").forEach(function (line) {
+                        bot.irc.notice(nick, "- " + line);
+                    });
+                } else {
+                    bot.irc.notice(nick, "Das Kommando kennen ich nicht!");
+                }
+            }
+            return true;
         }
     };
 
@@ -271,7 +322,8 @@ var RelayClient = function ( config ) {
         if (bot.dbconn) {
             bot.dbconn.end();
         }
-        if (bot.irc && bot.irc.conn.connected) {
+        bot.stopPolling();
+        if (bot.irc && bot.irc.conn && bot.irc.conn.connected) {
             bot.log(4, "IRC", "Disconnecting previous connection ...", ["red", "red"]);
             bot.irc.disconnect("Reconnecting...", function () { bot.createConnection(); });
         } else {
@@ -318,7 +370,11 @@ var RelayClient = function ( config ) {
         bot.dbconn = anyDb.createConnection(dbUrl, bot.handlers.dbConnected);
         bot.dbconn.on("end", bot.handlers.dbDisconnected);
 
-        setTimeout(function() { bot.irc.connect(); bot.irc.conn.setEncoding("ISO-8859-1"); }, 1500);
+        setTimeout(function() {
+            bot.irc.connect();
+            //bot.irc.conn.setEncoding("ISO-8859-1");
+        }, 1500);
+
         bot.authed = false;
     };
 
@@ -354,6 +410,59 @@ var RelayClient = function ( config ) {
             bot.irc.join(channel);
         });
         bot.perform();
+    };
+
+    bot.startPolling = function (intertval) {
+        if (bot.pollid) {
+            clearInterval(bot.pollid);
+        }
+        bot.firstPoll = true;
+        bot.pollid = setInterval(bot.pollForMessages, intertval);
+        bot.log(1, "Poller", "Message poller started!", ["magenta","green"]);
+    };
+
+    bot.stopPolling = function () {
+        if (bot.pollid) {
+            clearInterval(bot.pollid);
+        }
+        bot.pollid = false;
+        bot.log(1, "Poller", "Message poller has been halted.", ["magenta","red"]);
+    };
+
+    bot.pollForMessages = function() {
+        if (bot.db && bot.irc) {
+            try {
+                bot.db.query(queryStrings.messagePoll, {fromid: bot.lastMsgId}, function (err, result) {
+                    if (err) {
+                        throw err;
+                    }
+                    result.rows.reverse().forEach(function (message) {
+                        message.nick = message.nick.replace(/^IRC\s(.*)$/,"$1");
+                        msg = bot.bbParse(message.message);
+                        bot.lastMsgId = Math.max(bot.lastMsgId, message.messageId);
+                        if (_.contains(_.keys(bot.users), message.nick) || _.contains(_.pluck(bot.lookup, "username"), message.nick)) {
+                            bot.log(1, "Duplicate", util.format("%s: %s", message.nick, msg), ["yellow","grey"]);
+                        } else {
+                            if (!bot.firstPoll) {
+                                bot.irc.say(bot.conf.poller.channel,
+                                    util.format("%s: %s", irc.colors.wrap("bold", message.nick), msg));
+                            }
+                            bot.log(1, "Relay", util.format("%s: %s", message.nick, msg), ["cyan","white"]);
+                        }
+                    });
+                });
+            } catch(error) {
+                bot.log(4, "Poll Error", error.toString(), ["red","yellow"]);
+            }
+            bot.firstPoll = false;
+        }
+    };
+
+    bot.bbParse = function (text) {
+        text = text.replace(/\[b\]/i, "\u0002");
+        text = text.replace(/\[\/b\]/i, "\u000f");
+        text = text.replace(/\[[^\]]+?\]/i, "");
+        return text;
     };
 
     bot.broadcast = function (text) {
@@ -412,7 +521,8 @@ var RelayClient = function ( config ) {
             bot.db.query(queryStrings.removeKey, {id: result.id});
             bot.db.query(queryStrings.sendPM, {
                 id: result.id,
-                msg: "Dein IRC Key: " + key
+                msg: "Dein IRC Key. Benutze folgenden Befehl um dich einzuloggen: \n" +
+                    "/msg " + bot.irc.opt.nick + " login " + key
             }).on('end', function() {
                 bot.irc.notice(nickname, "Du hast deinen Key als PM auf dem Tracker erhalten.");
             });
@@ -466,25 +576,5 @@ var Relay = new RelayClient( RelayConfig );
 Relay.connect();
 
 process.on("SIGINT", function() {
-    Relay.connect();
+    Relay.quit("Got CTRL + C in console! Cya :(");
 });
-
-
-//process.on("message", function(comSignal) {
-//    util.log("[ Child Message ] Control message received: ", comSignal);
-//    switch (comSignal.command) {
-//        case "stop":
-//            Relay.quit("Exit on request! Good bye.");
-//            break;
-//        case "restart":
-//            Relay.restart();
-//            break;
-//        case "start":
-//            Relay.connect();
-//            break;
-//        case "message":
-//            console.log(comSignal.content);
-//            Relay.broadcast(comSignal.content);
-//            break;
-//    }
-//});
