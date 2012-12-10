@@ -281,6 +281,10 @@ var RelayClient = function ( config ) {
         }
     };
 
+    bot.ctcpVersionReply = function (from, to) {
+        bot.irc.ctcp(from, "VERSION", "AST4u ShoutBox Version " + bot.version + " - ")
+    };
+
     /** Loggin helper, just ignore it. */
     bot.padStr = function (str, num) { while (str.length < num) str += " "; return str; };
     bot.logLevel = ['info','notice','warn','error','fatality','madness','debug'];
@@ -570,7 +574,7 @@ var RelayClient = function ( config ) {
 };
 
 
-var RelayConfig = require("./configuration.js");
+var RelayConfig = require("./configuration.json");
 
 var Relay = new RelayClient( RelayConfig );
 Relay.connect();

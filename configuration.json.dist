@@ -1,0 +1,60 @@
+{
+    "server":"irc.yas-online.net",
+    "nickname":"ShoutBox",
+    "nickserv":{
+        "enabled":false,
+        "password":""
+    },
+    "loglevel":0,
+    "clientConfig":{
+        "userName":"sb-relay",
+        "realName":"ShoutBox Relay",
+        "stripColors":false,
+        "port":9999,
+        "debug":false,
+        "showErrors":true,
+        "autoRejoin":true,
+        "autoConnect":true,
+        "secure":true,
+        "selfSigned":true,
+        "certExpired":false,
+        "floodProtection":false,
+        "floodProtectionDelay":1000,
+        "channels":[
+            "#ast4u-talk"
+        ]
+    },
+    "poller":{
+        "interval":500,
+        "channel":"#ast4u-talk"
+    },
+    "dbConfig":{
+        "user":"",
+        "password":"",
+        "database":"",
+        "driver":"mysql",
+        "hostname":"localhost"
+    },
+    "ranks":{
+        "0":"User",
+        "1":"Power User",
+        "2":"Extrem User",
+        "3":"Hardcore User",
+        "5":"VIP",
+        "6":"Partner-VIP",
+        "7":"System",
+        "10":"Uploader",
+        "11":"Designer",
+        "20":"GU-Team",
+        "25":"Moderator",
+        "30":"Super Moderator",
+        "50":"Administrator",
+        "100":"Teamleiter",
+        "105":"TechOp",
+        "110":"Mitgründer",
+        "120":"Sysop"
+    },
+    "ignore":[
+        "Someone",
+    ]
+}
