@@ -1,33 +1,13 @@
 var irc = require("irc");
-var request = require("request");
 var anyDb = require("any-db");
 var _ = require("underscore");
 var util = require("util");
+var readline = require("readline");
+var utf8 = require("utf8");
+var queryStrings = require("./query_strings.json");
+var fs = require("fs");
 require("colors");
 
-var queryStrings = {
-    messagePoll : "SELECT s.id AS messageId, s.userid AS id, s.username AS nick, s.text AS message FROM shoutbox s " +
-        "WHERE s.deleted = 0 AND s.sticky = 0 AND s.id > $fromid " +
-        "ORDER BY s.date DESC LIMIT 10",
-
-    whois : "SELECT * FROM users WHERE username LIKE $nick AND enabled = 'yes' AND parked = 'no' LIMIT 1",
-
-    sendQry : "INSERT INTO shoutbox (userid, username, date, text) VALUES($id,$nick,$timestamp,$message)",
-
-    login: "SELECT u.id, u.username, u.class " +
-        "FROM irc_relayusers r " +
-        "LEFT JOIN users u ON u.id = r.id " +
-        "WHERE (r.irckey = UNHEX($key) OR r.ident = SHA1($ident))" +
-        "AND u.enabled = 'yes' AND u.parked = 'no' " +
-        "LIMIT 1",
-
-    updateIdent: "UPDATE irc_relayusers SET ident = SHA1($ident) WHERE irckey = UNHEX($key) LIMIT 1",
-    removeKey: "DELETE FROM irc_relayusers WHERE id = $id LIMIT 1",
-    selectKey: "SELECT HEX(irckey) as irckey, id FROM irc_relayusers WHERE irckey = $key LIMIT 1",
-    createKey: "INSERT INTO irc_relayusers (id,irckey) VALUES ($id,UNHEX($key))",
-    sendPM: "INSERT INTO messages (sender,receiver,folder_in,folder_out,added,read_date,subject,msg,unread) VALUES " +
-        "(0,$id,-1,0,CURTIME(),NULL,'IRC Shoutbox Key',$msg,'yes')"
-};
 
 var RelayClient = function ( config ) {
     var bot = this;
@@ -48,7 +28,8 @@ var RelayClient = function ( config ) {
         db: null,
         pollid: false,
         lastMsgId: 0,
-        lookup: {}
+        lookup: {},
+        addons: {}
     });
 
     /** Event Handlers */
@@ -184,7 +165,7 @@ var RelayClient = function ( config ) {
     bot.commands = {
         whoami : function (channel, nick, params, text, message) {
             if (channel == "__shorthelp")
-                return "Zeigt an, als wer du identifiziert bist.";
+                return "Zeigt deinen Identifikations-Status an.";
             if (channel == "__help")
                 return ["Beispiel: @whoami"];
 
@@ -200,9 +181,13 @@ var RelayClient = function ( config ) {
         },
         login : function (channel, nick, params, text, message) {
             if (channel == "__shorthelp")
-                return "Logt dich mit deinem IRC-Key (@help getkey) in das Relay ein.";
+                return "Identifiziert dich mit deinem IRC-Key (@help getkey) im ShoutBox-Relay.";
             if (channel == "__help")
-                return ["/msg " + bot.irc.opt.nick + " login <irc-key>"];
+                return [
+                    "Ein Relay ist eine Weiterleitung/Durchschaltung zwischen 2 Endpunkten,",
+                    "was in unserem Fall bedeutet, dass IRC und Shoutbox miteinander verbunden werden.",
+                    "Beispiel: /msg " + bot.irc.opt.nick + " login <irc-key>"
+                ];
 
             if (channel) {
                 if (params.length > 0) {
@@ -224,14 +209,14 @@ var RelayClient = function ( config ) {
         },
         getkey : function (channel, nick, params, text, message) {
             if (channel == "__shorthelp")
-                return "Fordert einen IRC Key an. Siehe '@help getkey' für details.";
+                return "Fordert einen IRC-Key an. Siehe '@help getkey' für details.";
             if (channel == "__help")
                 return [
                     "Hi, " + nick + ", mit diesem Kommando forderst du deinen IRC Key an,",
                     "dieser ist wie dein Passkey ein persönliches Geheimnis!",
-                    "Nach verwendung, wird dir auf dem Tracker eine PM zugestellt.",
-                    irc.colors.wrap("bold","In der PM findest du weitere Anweisungen!"),
-                    "Verwendung: @getkey " + bot.irc.opt.nick
+                    irc.colors.wrap("red", "Es wird dir auf dem Tracker eine PM mit dem Key zugestellt."),
+                    irc.colors.wrap("bold", "In der PM findest du weitere Anweisungen!"),
+                    "Beispiel: @getkey <tracker-user>"
                 ];
             bot.createUser(nick, params.join(" "));
             return true;
@@ -263,14 +248,14 @@ var RelayClient = function ( config ) {
 
             if (params.length <= 0) {
                 _.keys(bot.commands).forEach(function(cmd) {
-                    bot.irc.notice(nick, "Command: @" + cmd + " - " + irc.colors.wrap("bold",bot.commands[cmd]("__shorthelp")));
+                    bot.irc.notice(nick, "Command: @" + cmd + " - " + irc.colors.wrap("bold",bot.commands[cmd]("__shorthelp", nick)));
                 });
                 bot.irc.notice(nick, "Für details: @help <command>");
             } else {
                 if (bot.commands[params[0]]) {
-                    bot.irc.notice(nick, "Commande: @" + params[0]);
-                    bot.irc.notice(nick, bot.commands[params[0]]("__shorthelp"));
-                    bot.commands[params[0]]("__help").forEach(function (line) {
+                    bot.irc.notice(nick, "Command: @" + params[0]);
+                    bot.irc.notice(nick, bot.commands[params[0]]("__shorthelp", nick));
+                    bot.commands[params[0]]("__help", nick).forEach(function (line) {
                         bot.irc.notice(nick, "- " + line);
                     });
                 } else {
@@ -302,12 +287,8 @@ var RelayClient = function ( config ) {
             } else {
                 levelName = levelName.cyan
             }
-            if (util.isError(message)) {
-                util.error( "    >>>>> EXCEPTION <<<<<     ".red.inverse, message, "    >>>>> CONTINUE! <<<<<     ".blue.inverse);
-            } else {
-                util.log( levelName + ("[" + bot.padStr(tag, 11) + "]")[colors[0]]
-                    + " " + message[colors[1]] );
-            }
+            util.log( levelName + ("[" + bot.padStr(tag, 11) + "]")[colors[0]]
+                + " " + (message[colors[1]]).toString() );
         }
     };
 
@@ -320,6 +301,69 @@ var RelayClient = function ( config ) {
             (bot.conf.clientConfig ? "SSL".green : "insecure".red),
             bot.conf.nickname
         ), ["yellow", "grey"]);
+
+    /** Imports and registers Addons */
+    bot.autoImportAddons = function () {
+        fs.readdir("./lib", function (addons) {
+            addons.forEach(function (moduleFile) {
+                if (moduleFile.match(/\.js$/i)) {
+                    var mod = require("./lib/" + moduleFile);
+                    bot.loadModule(mod, moduleFile);
+                }
+            });
+        });
+    };
+
+    /** Safely load a module */
+    bot.loadModule = function (mod, source) {
+        if (mod.name && mod.version && mod.addon) {
+            if (!bot.addons[name]) {
+                bot.addons[name].module = mod;
+                /** Events */
+                if (mod.addon.events) {
+                    var events = [];
+                    _.each(mod.addon.events, function (handlers, event) {
+                        _.each(handlers, function (callback, index) {
+                            bot.irc.addListener(event, callback);
+                            events.push(event + ":" + index);
+                        });
+                    });
+                    bot.log(1, mod.name, "Registered events: " + events.join(", "), ["magenta","green"]);
+                }
+                /** Commands */
+                if (mod.addon.commands) {
+                    bot.log(1, mod.name, "Registering commands: " + _.keys(mod.addon.commands).join(", "), ["magenta","green"]);
+                } else {
+                    bot.log(0, mod.name, "Has no commands.", ["magenta","grey"]);
+                }
+                /** Extending the base  */
+                if (mod.addon.base) {
+                    _.each(mod.addon.base, function (func, on, self) {
+                        if (!bot[on]) {
+                            bot.log(1, mod.name, "Hooking RelayClient." + on + " into the base.", ["magenta","white"]);
+                            bot[on] = self[on];
+                        } else {
+                            if (bot.conf.allowOverrides) {
+                                bot.log(2, mod.name, "Overriding RelayClient." + on +
+                                    " because config.allowOverrides is 'true'.", ["magenta","yellow"]);
+                                //bot["original_" + on] = bot[on].bind(bot);
+                                bot[on] = _.wrap(bot[on], function(parent) {
+                                    parent.apply(bot, arguments);
+                                    return self[on].apply(bot, arguments);
+                                });
+                            } else {
+
+                            }
+                        }
+                    });
+                }
+            } else {
+                bot.log(3, mod.name, "Addon already loaded. Unload it first before loading it again!", ["red","yellow"]);
+            }
+        } else {
+            bot.log(3, "Addon", source + ": Does not look like a module, skipping it.", ["magenta","red"]);
+        }
+    };
 
     /** Connect / Reconnect the bot to IRC & MySQL */
     bot.connect = function () {
@@ -366,7 +410,8 @@ var RelayClient = function ( config ) {
                     bot.irc.removeListener("notice", notice);
                 }
             }
-        }
+        };
+
         bot.irc.addListener("notice", notice);
 
         var dbConf = bot.conf.dbConfig;
@@ -384,6 +429,9 @@ var RelayClient = function ( config ) {
 
     bot.quit = function (message) {
         bot.log(3, "Quit", message, ["magenta","yellow"]);
+        bot.channels.forEach(function (channel) {
+            bot.irc.say(channel, "Ich starte schnell neu! Einen Augenblick bitte...")
+        });
         if (bot.irc && bot.irc.conn.connected) {
             bot.irc.disconnect(message, function() {
                 //process.send({type: "end"});
@@ -440,33 +488,33 @@ var RelayClient = function ( config ) {
                     if (err) {
                         throw err;
                     }
-                    result.rows.reverse().forEach(function (message) {
-                        message.nick = message.nick.replace(/^IRC\s(.*)$/,"$1");
-                        msg = bot.bbParse(message.message);
-                        bot.lastMsgId = Math.max(bot.lastMsgId, message.messageId);
-                        if (_.contains(_.keys(bot.users), message.nick) || _.contains(_.pluck(bot.lookup, "username"), message.nick)) {
-                            bot.log(1, "Duplicate", util.format("%s: %s", message.nick, msg), ["yellow","grey"]);
-                        } else {
-                            if (!bot.firstPoll) {
-                                bot.irc.say(bot.conf.poller.channel,
-                                    util.format("%s: %s", irc.colors.wrap("bold", message.nick), msg));
-                            }
-                            bot.log(1, "Relay", util.format("%s: %s", message.nick, msg), ["cyan","white"]);
+                    result.rows.reverse().forEach(function (mrow) {
+                        mrow.nick = mrow.nick.replace(/^IRC\s(.*)$/,"$1");
+                        mrow.message = bot.bbParse(mrow.message);
+                        mrow.message = utf8.decode(mrow.message);
+                        bot.lastMsgId = Math.max(bot.lastMsgId, mrow.messageId);
+                        if (!bot.firstPoll && mrow.message.substr(0,2) != "@@") {
+                            bot.irc.say(bot.conf.poller.channel,
+                                util.format("%s: %s", irc.colors.wrap("bold", mrow.nick), mrow.message));
+                            bot.log(1, "Relay", util.format("%s: %s", mrow.nick, mrow.message), ["cyan","white"]);
                         }
                     });
+                    bot.firstPoll = false;
                 });
             } catch(error) {
                 bot.log(4, "Poll Error", error.toString(), ["red","yellow"]);
             }
-            bot.firstPoll = false;
         }
     };
 
     bot.bbParse = function (text) {
-        text = text.replace(/\[b\]/i, "\u0002");
-        text = text.replace(/\[\/b\]/i, "\u000f");
-        text = text.replace(/\[[^\]]+?\]/i, "");
-        return text;
+        var output = "";
+        output = text.replace(/\[b\]/gi, "\u0002");
+        output = output.replace(/\[\/b\]/gi, "\u000f");
+        /** Match [url=http://www.google.com]Google[/url] */
+        output = output.replace(/\[\/url(=(.+?))?\](.*?)\[\/url\]/gi,"\u0002$3\u0002 $2");
+        output = output.replace(/\[[^\]]+?\]/gi, "");
+        return output;
     };
 
     bot.broadcast = function (text) {
@@ -563,6 +611,7 @@ var RelayClient = function ( config ) {
 
     bot.applyUserStatus = function (nickname, set) {
         bot.channels.forEach(function (channel) {
+            bot.log(1, "Mode", "Giving user " + nickname + (set ? "+" : "-") + "v mode", ["green","white"]);
             bot.irc.send("mode", channel, (set ? "+" : "-") + "v", nickname);
         });
     };
@@ -573,12 +622,53 @@ var RelayClient = function ( config ) {
     };
 };
 
+var cli = readline.createInterface(process.stdin, process.stdout);
+cli.setPrompt("> ");
+cli.prompt();
 
 var RelayConfig = require("./configuration.json");
 
 var Relay = new RelayClient( RelayConfig );
 Relay.connect();
 
-process.on("SIGINT", function() {
-    Relay.quit("Got CTRL + C in console! Cya :(");
+//process.on("SIGINT", function() {
+//    Relay.quit("Got CTRL + C in console! Cya :(");
+//});
+
+cli.on('line', function(line) {
+    if (line.length) {
+        if (line.charAt(0) != "/") {
+            Relay.broadcast(line);
+        } else {
+            var comLine = line.substr(1),
+                params = comLine.split(/\s+/),
+                command = params.splice(0,1);
+            if (Relay.irc && Relay.irc[command]) {
+                Relay.log(1, "cli IRC", "Running native function RelayClient\\irc\\"
+                    + command + "(" + params.join(", ") + ") ...", ["cyan","white"]);
+                Relay.irc[command].apply(Relay.irc, params);
+            } else if(Relay[command]) {
+                Relay.log(1, "cli BASE", "Running base function RelayClient\\"
+                    + command + "(" + params.join(", ") + ") ...", ["cyan","white"]);
+                Relay.irc[command].apply(Relay, params);
+            } else {
+                params = command.concat(params);
+                Relay.log(2, "cli raw", "Sending raw IRC command [ " + params.join(" ") + " ]", ["cyan","yellow"]);
+                try {
+                    Relay.irc.send.apply(Relay.irc, params);
+                } catch (err) {
+                    Relay.log(3, "Error", "Raw > " + err.message, ["red","red"]);
+                }
+            }
+        }
+    }
+    cli.prompt();
+});
+
+cli.on("SIGINT", function () {
+    cli.question("Are you mad? [yes/no] ", function (ismad){
+        if (ismad.match(/(ja?|y(es)?)/i)) {
+            Relay.quit("THIS IS SPARTAAAAAAAAAAAAAAAAAAAAAA!");
+        }
+    });
 });
