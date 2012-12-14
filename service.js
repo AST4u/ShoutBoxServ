@@ -555,11 +555,9 @@ var RelayClient = function ( config ) {
     };
 
     bot.createUser = function (nickname, username) {
-        var next = _.once(bot.createUserEnd);
-        bot.db.query(queryStrings.whois, {nick: username}).on('row', function (row) {
-            next(row, nickname, username);
-        }).on('end', function() {
-            next(false, nickname, username);
+        bot.db.query(queryStrings.whois, {nick: username}, function (err, result) {
+            if (err) throw err;
+            bot.createUserEnd(result.rows[0], nickname, username);
         });
     };
 
@@ -573,8 +571,9 @@ var RelayClient = function ( config ) {
             bot.db.query(queryStrings.removeKey, {id: result.id});
             bot.db.query(queryStrings.sendPM, {
                 id: result.id,
-                msg: "Dein IRC Key. Benutze folgenden Befehl um dich einzuloggen: \n" +
-                    "/msg " + bot.irc.opt.nick + " login " + key
+                msg: "Dein IRC Key. Benutze folgenden Befehl um dich [b]IM IRC CHANNEL[/b] einzuloggen: \n" +
+                    "/msg " + bot.irc.opt.nick + " login " + key + "\n" +
+                    "[color=red]Im IRC Channel bedeutet, dass du diesen Befehl auf keinen Fall in der ShoutBox schreiben sollst![/color]"
             }).on('end', function() {
                 bot.irc.notice(nickname, "Du hast deinen Key als PM auf dem Tracker erhalten.");
             });

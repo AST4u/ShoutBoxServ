@@ -1,11 +1,11 @@
 {
     "messagePoll": "SELECT s.id AS messageId, s.userid AS id, s.username AS nick, s.text AS message FROM shoutbox s WHERE s.deleted = 0 AND s.sticky = 0 AND s.id > $fromid AND irc = 0 ORDER BY s.date DESC LIMIT 10",
-    "whois": "SELECT * FROM users WHERE username LIKE $nick AND enabled = 'yes' AND parked = 'no' LIMIT 1",
+    "whois": "SELECT * FROM users WHERE username = $nick AND enabled = 'yes' AND parked != 'yes' LIMIT 1",
     "sendQry": "INSERT INTO shoutbox (userid, username, date, text, irc) VALUES($id,$nick,$timestamp,$message,1)",
-    "login": "SELECT u.id, u.username, u.class FROM irc_relayusers r LEFT JOIN users u ON u.id = r.id WHERE (r.irckey = UNHEX($key) OR r.ident = SHA1($ident)) AND u.enabled = 'yes' AND u.parked = 'no' LIMIT 1",
+    "login": "SELECT u.id, u.username, u.class FROM irc_relayusers r LEFT JOIN users u ON u.id = r.id WHERE (r.irckey = UNHEX($key) OR r.ident = SHA1($ident)) AND u.enabled = 'yes' AND u.parked != 'yes' LIMIT 1",
     "updateIdent": "UPDATE irc_relayusers SET ident = SHA1($ident) WHERE irckey = UNHEX($key) LIMIT 1",
     "removeKey": "DELETE FROM irc_relayusers WHERE id = $id LIMIT 1",
     "selectKey": "SELECT HEX(irckey) as irckey, id FROM irc_relayusers WHERE irckey = $key LIMIT 1",
     "createKey": "INSERT INTO irc_relayusers (id,irckey) VALUES ($id,UNHEX($key))",
-    "sendPM": "INSERT INTO messages (sender,receiver,folder_in,folder_out,added,read_date,subject,msg,unread) VALUES (0,$id,-1,0,CURTIME(),NULL,'IRC Shoutbox Key',$msg,'yes')"
+    "sendPM": "INSERT INTO messages (sender,receiver,folder_in,folder_out,added,read_date,subject,msg,unread) VALUES (0,$id,-1,0,NOW(),NULL,'IRC Shoutbox Key',$msg,'yes')"
 }
