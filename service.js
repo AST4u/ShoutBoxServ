@@ -571,8 +571,8 @@ var RelayClient = function ( config ) {
             bot.db.query(queryStrings.removeKey, {id: result.id});
             bot.db.query(queryStrings.sendPM, {
                 id: result.id,
-                msg: "Dein IRC Key. Benutze folgenden Befehl um dich [b]IM IRC CHANNEL[/b] einzuloggen: \n" +
-                    "/msg " + bot.irc.opt.nick + " login " + key + "\n" +
+                msg: "Dein IRC Key. Benutze folgenden Befehl um dich [b]IM IRC CHANNEL[/b] einzuloggen: \n\n" +
+                    "/msg " + bot.irc.opt.nick + " login " + key + "\n\n" +
                     "[color=red]Im IRC Channel bedeutet, dass du diesen Befehl auf keinen Fall in der ShoutBox schreiben sollst![/color]"
             }).on('end', function() {
                 bot.irc.notice(nickname, "Du hast deinen Key als PM auf dem Tracker erhalten.");
