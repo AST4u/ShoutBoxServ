@@ -630,9 +630,9 @@ var RelayConfig = require("./configuration.json");
 var Relay = new RelayClient( RelayConfig );
 Relay.connect();
 
-//process.on("SIGINT", function() {
-//    Relay.quit("Got CTRL + C in console! Cya :(");
-//});
+process.on("uncaughtException", function(err) {
+    util.error(err);
+});
 
 cli.on('line', function(line) {
     if (line.length) {
@@ -663,6 +663,8 @@ cli.on('line', function(line) {
     }
     cli.prompt();
 });
+
+
 
 cli.on("SIGINT", function () {
     cli.question("Are you mad? [yes/no] ", function (ismad){
